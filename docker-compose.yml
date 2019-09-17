@@ -1,0 +1,154 @@
+version: '3.2'
+
+services:
+    app:
+        image: webdevops/php-apache-dev:7.2
+        volumes:
+            - ${PWD}:/app
+            - ${PWD}/docker/app/entrypoint/98-permissions.sh:/opt/docker/provision/entrypoint.d/98-permissions.sh
+            - ${PWD}/docker/app/entrypoint/99-composer.sh:/opt/docker/provision/entrypoint.d/99-composer.sh
+            - ${PWD}/docker/app/entrypoint/100-wait.sh:/opt/docker/provision/entrypoint.d/100-wait.sh
+            - ~/.ssh:/home/application/.ssh
+            - ~/.composer:/home/application/.composer
+        working_dir: /app
+        depends_on:
+            - elasticsearch
+            - database
+            - redis
+        environment:
+            php.error_reporting: E_ALL
+            WEB_DOCUMENT_ROOT: /app
+            WEB_DOCUMENT_INDEX: index.php
+            COMPOSER_MEMORY_LIMIT: -1
+            PHP_MEMORY_LIMIT: 521M
+            PHP_MAX_EXECUTION_TIME: 300
+            PHP_POST_MAX_SIZE: 500M
+            PHP_UPLOAD_MAX_FILESIZE: 500M
+            PHP_DATE_TIMEZONE: Europe/Paris
+            PHP_DISPLAY_ERRORS: 1
+            PHP_DEBUGGER: xdebug
+            XDEBUG_REMOTE_PORT: 9000
+            XDEBUG_REMOTE_AUTOSTART: 1
+            XDEBUG_REMOTE_CONNECT_BACK: 1
+            XDEBUG_PROFILER_ENABLE: 1
+            XDEBUG_PROFILER_ENABLE_TRIGGER: 1000
+        labels:
+            - "traefik.backend=app"
+            - "traefik.frontend.rule=Host:app.druss.docker"
+            - "traefik.docker.network=proxy"
+        networks:
+            - internal
+            - proxy
+        ports:
+            - 8001:80
+
+    database:
+        image: percona:5.6
+        environment:
+            MYSQL_ROOT_PASSWORD: root
+            MYSQL_DATABASE: app
+        healthcheck:
+            test: mysql --user=root --password=root --execute "show databases"
+            interval: 5s
+            timeout:  1s
+            retries:  3
+        networks:
+            - internal
+        volumes:
+            - perconadata:/var/lib/mysql
+
+    elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:6.8.2
+        environment:
+            http.host: "0.0.0.0"
+            transport.host: "127.0.0.1"
+            xpack.security.enabled: "false"
+            ES_JAVA_OPTS: "-Xms150m -Xmx750m -XX:ReservedCodeCacheSize=60m -XX:+UseConcMarkSweepGC -XX:SoftRefLRUPolicyMSPerMB=50 -XX:MaxRAM=1G"
+        ports:
+            - 9200:9200
+        volumes:
+            - esdata:/usr/share/elasticsearch/data
+        healthcheck:
+            test: curl localhost:9200
+            interval: 5s
+            timeout:  1s
+            retries:  3
+        depends_on:
+            - database
+        networks:
+            - internal
+
+    maildev:
+        image: djfarrelly/maildev
+        labels:
+            - "traefik.backend=maildev"
+            - "traefik.frontend.rule=Host:maildev.druss.docker"
+            - "traefik.port=80"
+            - "traefik.frontend.passHostHeader=true"
+            - "traefik.docker.network=proxy"
+        networks:
+            - internal
+            - proxy
+
+    phpmyadmin:
+        image: phpmyadmin/phpmyadmin
+        container_name: druss_phpmyadmin
+        environment:
+            MYSQL_ROOT_PASSWORD: root
+            PMA_HOST: database
+            DOMAIN_NAME: phpmyadmin.starter.docker
+            VIRTUAL_HOST: phpmyadmin.starter.docker
+        labels:
+            - "traefik.frontend.rule=Host:phpmyadmin.druss.docker"
+            - "traefik.port=80"
+            - "traefik.docker.network=proxy"
+        networks:
+            - internal
+            - proxy
+
+    traefik:
+        image: traefik
+        container_name: druss_traefik
+        command: --web --docker --docker.domain=docker --logLevel=DEBUG
+        ports:
+            - "80:80"
+            - "443:443"
+            - "8080:8080"
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+        restart: always
+        networks:
+            - internal
+            - proxy
+
+    redis:
+        image: redis
+        networks:
+            - internal
+            - proxy
+
+    redis-commander:
+        image: rediscommander/redis-commander
+        labels:
+            - "traefik.backend=redis-commander"
+            - "traefik.frontend.rule=Host:redis-commander.druss.docker"
+            - "traefik.port=8081"
+            - "traefik.docker.network=proxy"
+        networks:
+            - internal
+            - proxy
+        environment:
+            - "REDIS_HOST=redis"
+            - "REDIS_PORT=6379"
+
+volumes:
+    esdata:
+        driver: local
+    perconadata:
+        driver: local
+
+networks:
+    proxy:
+        external:
+            name: traefik
+    internal:
